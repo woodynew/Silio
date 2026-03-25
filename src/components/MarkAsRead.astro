@@ -1,0 +1,86 @@
+---
+import Default from '@astrojs/starlight/components/Pagination.astro';
+
+const { id } = Astro.props;
+---
+
+<div class="mark-as-read-container">
+  <label class="mark-as-read-label">
+    <input type="checkbox" id="mark-read-checkbox" data-page-id={id} />
+    <span>标记为已读（完成学习）</span>
+  </label>
+</div>
+
+<Default {...Astro.props} />
+
+<script>
+  function setupMarkAsRead() {
+    const checkbox = document.getElementById('mark-read-checkbox') as HTMLInputElement | null;
+    if (!checkbox) return;
+
+    const pageId = checkbox.getAttribute('data-page-id');
+    if (!pageId) return;
+
+    const storageKey = 'java-tutorial-progress';
+    
+    // Load state
+    const getProgress = () => {
+      try {
+        return JSON.parse(localStorage.getItem(storageKey) || '{}');
+      } catch {
+        return {};
+      }
+    };
+
+    const progress = getProgress();
+    checkbox.checked = !!progress[pageId];
+
+    // Listen to changes
+    checkbox.addEventListener('change', (e) => {
+      const currentProgress = getProgress();
+      if ((e.target as HTMLInputElement).checked) {
+        currentProgress[pageId] = true;
+      } else {
+        delete currentProgress[pageId];
+      }
+      localStorage.setItem(storageKey, JSON.stringify(currentProgress));
+      
+      // Dispatch event so sidebar can potentially update without reload
+      window.dispatchEvent(new CustomEvent('progress-updated'));
+    });
+  }
+
+  // Setup on initial load and view transitions
+  document.addEventListener('astro:page-load', setupMarkAsRead);
+  setupMarkAsRead();
+</script>
+
+<style>
+  .mark-as-read-container {
+    margin-top: 2rem;
+    padding: 1.5rem;
+    background-color: var(--sl-color-bg-nav);
+    border: 1px solid var(--sl-color-hairline);
+    border-radius: 0.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  
+  .mark-as-read-label {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    cursor: pointer;
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--sl-color-text-accent);
+  }
+
+  .mark-as-read-label input[type="checkbox"] {
+    width: 1.5rem;
+    height: 1.5rem;
+    cursor: pointer;
+    accent-color: var(--sl-color-text-accent);
+  }
+</style>

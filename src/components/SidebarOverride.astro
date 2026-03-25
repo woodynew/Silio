@@ -1,0 +1,63 @@
+---
+import Default from '@astrojs/starlight/components/Sidebar.astro';
+---
+
+<div id="custom-sidebar">
+  <Default {...Astro.props} />
+</div>
+
+<script>
+  function updateSidebarCheckmarks() {
+    const storageKey = 'java-tutorial-progress';
+    let progress = {};
+    try {
+      progress = JSON.parse(localStorage.getItem(storageKey) || '{}');
+    } catch {
+      // Ignored
+    }
+
+    const links = document.querySelectorAll('#custom-sidebar a');
+    links.forEach((link) => {
+      const href = link.getAttribute('href');
+      // Normalize href to match Astro page IDs or simple paths
+      if (!href) return;
+      
+      // Find the text span to append the checkmark
+      let textSpan = link.querySelector('.check-mark');
+      
+      let isCompleted = false;
+      // Rough matching of href with pageId, we'll format the href and check progress object
+      // Astro's id usually matches the slug or file path. 
+      // We will look for object keys that match the link href
+      for (const [key, val] of Object.entries(progress)) {
+        // e.g. key = "tutorials/01-introduction.md" or "tutorials/01-introduction"
+        // href = "/tutorials/01-introduction/"
+        const normalizedKey = '/' + key.replace(/\.mdx?$/, '') + '/';
+        const backupKey = '/' + key.replace(/\.mdx?$/, '');
+        if ((href === normalizedKey || href === backupKey || href === key) && val) {
+          isCompleted = true;
+          break;
+        }
+      }
+
+      if (isCompleted) {
+        if (!textSpan) {
+          const span = document.createElement('span');
+          span.className = 'check-mark';
+          span.innerHTML = ' ✅';
+          span.style.color = 'var(--sl-color-text-accent)';
+          span.style.fontSize = '0.9em';
+          link.appendChild(span);
+        }
+      } else {
+        if (textSpan) {
+          textSpan.remove();
+        }
+      }
+    });
+  }
+
+  document.addEventListener('astro:page-load', updateSidebarCheckmarks);
+  window.addEventListener('progress-updated', updateSidebarCheckmarks);
+  updateSidebarCheckmarks();
+</script>

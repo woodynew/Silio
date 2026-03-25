@@ -1,0 +1,40 @@
+---
+title: 欢迎来到 Java 实战教程
+description: Get started building your docs site with Starlight.
+template: splash
+hero:
+  tagline: 发现“把技术串联解决实际问题”的路线图。抛弃纯理论，从零开始搭建你的高并发、高可用项目吧！
+  image:
+    file: ../../assets/houston.webp
+  actions:
+    - text: 开始学习
+      link: /tutorials/01-introduction/
+      icon: right-arrow
+      variant: primary
+    - text: 查看 GitHub
+      link: https://github.com/woodynew/Silio
+      icon: external
+---
+
+import { Card, CardGrid } from "@astrojs/starlight/components";
+
+## 实战路线图
+
+<CardGrid stagger>
+  <Card title="入门：手写简易服务器" icon="pencil">
+    抛开庞大的 Spring 框架，用 Java Socket 和多线程手写一个简易的 HTTP Web
+    服务器，理解网络协议底层的运行机制。
+  </Card>
+  <Card title="进阶：图书管理系统" icon="add-document">
+    使用 Spring Boot + MyBatis Plus 开发一个完整的 CRUD 系统。学习 RESTful API
+    设计与数据持久化模式。
+  </Card>
+  <Card title="高阶：微服务与秒杀" icon="setting">
+    深入 Spring Cloud Alibaba，基于 Redis 分布式锁、RocketMQ
+    彻底拆解并实现企业级的高并发秒杀系统架构。
+  </Card>
+  <Card title="调优：真实生产事故复盘" icon="open-book">
+    不只教怎么写，教你“为什么不那样写”。通过导致内存溢出、死锁和慢 SQL
+    的真实案例，来学习 JVM 调优和 MySQL 索引优化。
+  </Card>
+</CardGrid>
