@@ -1,0 +1,172 @@
+---
+title: 实战十：基于 NIO 的单线程高并发聊天室
+description: 直击 Netty 与 Redis 的心脏！掌握用单线程承载上万并发的究极“多路复用”思想。
+sidebar:
+  order: 19
+---
+
+> **场景与痛点**：在上一节的 HTTP 服务器中，我们遇到了“一请求一线程”会被阻塞挂起拖死的问题。如果一台机器要在内存有限的前提下长连接容纳 10,000 人在线群聊，绝对不能开一万个线程！我们需要引入史诗级的底层系统调用机制——`epoll/kqueue`，而在 Java 里，它被封装成了非阻塞 IO (Java NIO)。
+
+## ⚙️ 多路复用 (Multiplexing) 的核心哲学
+
+一个人管一万张嘴！谁想说话，系统只通知他一个人去处理。
+
+```mermaid
+graph TD
+    A[Client 1] -.等待中... .-> C{Selector (多路复用大管家)}
+    B[Client 2 发送了消息!] -->|触发 OP_READ 事件| C
+    Z[Client 10000] -.挂机中... .-> C
+
+    C -->|只有1个单核主线程 (EventLoop)| D[仅处理 B 的信息读取，并广播分发给其他注册通道]
+    D --> C
+```
+
+## 💻 步步为营：高低速合璧的高并发群聊
+
+### 步骤 1：大管家 Selector 与 Channel 通道就绪
+
+我们需要打破只能 `accept()` 死等阻塞的魔咒：把 Socket 变成非阻塞 (Non-Blocking) 模式。
+
+```java
+import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
+import java.nio.channels.*;
+import java.util.Iterator;
+import java.util.Set;
+
+public class NioChatServer {
+    private final int PORT = 9999;
+    private Selector selector;
+    private ServerSocketChannel serverChannel;
+
+    public NioChatServer() throws Exception {
+        // 1. 获取大管家（底层依附于 OS 轮询机制）
+        selector = Selector.open();
+
+        // 2. 建立接客的通道
+        serverChannel = ServerSocketChannel.open();
+        serverChannel.bind(new InetSocketAddress(PORT));
+
+        // 🌟 最核心：声明这是个非阻塞通道
+        serverChannel.configureBlocking(false);
+
+        // 3. 将总门房注册给大管家，让大管家监听有无"新客来访 OP_ACCEPT"
+        serverChannel.register(selector, SelectionKey.OP_ACCEPT);
+
+        System.out.println("🔥 NIO 单线程事件驱动群聊已在 " + PORT + " 席卷全城！");
+    }
+}
+```
+
+### 步骤 2：Event Loop 无限轮询事件循环
+
+我们的主线程（且仅仅只有一个！）只要做死循环，等待 Selector 通知“哪桌上好菜了”：
+
+```java
+    public void startEventLoop() {
+        try {
+            while (true) {
+                // 如果没人发声，大管家就阻塞在这里等待。如果有 1 个人甚至 100 个人同时动作，它会立即放行。
+                if (selector.select() == 0) continue;
+
+                // 取出所有目前被通知有动作的 "事件钥匙 (SelectionKey)"
+                Set<SelectionKey> readyKeys = selector.selectedKeys();
+                Iterator<SelectionKey> iterator = readyKeys.iterator();
+
+                while (iterator.hasNext()) {
+                    SelectionKey key = iterator.next();
+                    iterator.remove(); // 💡处理过必须拔掉，否则就会死循环重读！
+
+                    try {
+                        if (key.isAcceptable()) {
+                            // 有新来的连接接入！
+                            handleAccept(key);
+                        }
+                        if (key.isReadable()) {
+                            // 有客户端发来消息了！
+                            handleRead(key);
+                        }
+                    } catch (Exception e) {
+                        key.cancel(); // 如果出错了，取消这个连接在管家这的登记
+                    }
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+```
+
+### 步骤 3：缓冲区数据的吞吐以及全局广播
+
+非阻塞世界不能用 `InputStream`，只能用直接跟系统内存挂钩的 `ByteBuffer`：
+
+```java
+    private void handleAccept(SelectionKey key) throws Exception {
+        ServerSocketChannel server = (ServerSocketChannel) key.channel();
+        SocketChannel client = server.accept(); // 接新客
+        client.configureBlocking(false); // 🌟 新来的也声明为非阻塞
+
+        // 把新客人注册给大管家，监听他的"就绪读取 OP_READ"
+        client.register(selector, SelectionKey.OP_READ);
+        System.out.println("[全局广播] " + client.getRemoteAddress() + " 悄悄切入了聊天室。");
+    }
+
+    private void handleRead(SelectionKey key) throws Exception {
+        SocketChannel client = (SocketChannel) key.channel();
+        ByteBuffer buffer = ByteBuffer.allocate(1024);
+
+        int count = client.read(buffer);
+        if (count > 0) {
+            String msg = new String(buffer.array()).trim();
+            System.out.println("收到群发: " + msg);
+            // 这里将消息原样下发给所有除自己以外的管家名单中人
+            broadcastMessage(msg, client);
+        } else if (count == -1) {
+            // 如果传来的是流硬断的 -1，说明客户端主动打断退出
+            System.out.println("[全局广播] 有人退出了群聊。");
+            client.close();
+        }
+    }
+
+    private void broadcastMessage(String msg, SocketChannel sender) throws Exception {
+        // 遍历大管家上在册的所有有效连接
+        for (SelectionKey key : selector.keys()) {
+            Channel target = key.channel();
+            // 只要不是总门房(ServerSocket)，并且不是发消息的自己
+            if (target instanceof SocketChannel && target != sender) {
+                SocketChannel dest = (SocketChannel) target;
+                ByteBuffer outBuffer = ByteBuffer.wrap((msg + "\n").getBytes());
+                dest.write(outBuffer);
+            }
+        }
+    }
+
+    // 最后提供一个 main 方法入口
+    public static void main(String[] args) throws Exception {
+        new NioChatServer().startEventLoop();
+    }
+```
+
+## 🛡 韧性与异常边界 (Resilience)
+
+如果一个客户端崩溃，直接强退拔网线（而不发送正常结束符），会发生什么？
+在上面 `handleRead` 时，底层的系统网络协议栈会捕获这个强行挂断抛出 `java.io.IOException: Connection reset by peer`！如果不把它包裹 `try..catch` 并 `key.cancel()` 踢出大管家名单，我们将陷入可怕的主线程无限抛异常死循环之中，直接逼爆全服！单核异步系统的最大代价就是：**一旦这唯一干活的线程抛出不可挽回的崩溃，整个全网万级服务顷刻瘫痪**。
+
+## ⚠️ 避坑说明 (Post-mortem)
+
+- **既然 NIO 单线程这么猛，为啥我们不手写它？**：上面为了演示去掉了无数黏包与半包解析判断。在真实以太网中，长句会被强制切半发送（TCP 拆包）。处理这些边界条件让人痛不欲生。并且现代 CPU 全是 8 小核 16 大核，单线程大管家等于白费了多核性能！这就是为什么大杀器 **Netty** 框架诞生了：它是以 `主从多 Reactor 线程模型`（多个大管家并行监管百万级并发）包围的，彻底解决了手写 NIO 时的繁冗恶心。本章节仅为你揭示心跳底盘！
+
+---
+
+## 🎯 本章小结
+
+通过本项目，你掌握了：
+- `Selector` 多路复用的核心哲学：单线程管理上万连接。
+- `SocketChannel` 非阻塞模式配置与 `SelectionKey` 事件注册。
+- `ByteBuffer` 直接内存缓冲区的读写机制。
+- Event Loop 事件循环的完整工作流程及其与 Netty Reactor 模型的关系。
+
+📦 **完整源码参考**：[GitHub - Silio/project-10-nio-chat](https://github.com/woodynew/Silio)
+
+🎉 **恭喜通关！** 你已经完成了全部 10 个入门级实战项目。这些底层知识将成为你进阶 Spring Boot、微服务架构的坚实基础。

@@ -1,0 +1,142 @@
+---
+title: 实战五：轻量级数据库连接池
+description: 利用阻塞队列与池化技术，揭开生产级中间件高并发复用下资源竞争的面纱。
+sidebar:
+  order: 14
+---
+
+> **场景与痛点**：数据库建立连接 (`TCP 三次握手`) 的成本极其高昂且耗时漫长。如果每个用户请求都立刻新建和断开连接，哪怕 MySQL 本身再强，也会被建立握手的开销拖死。工业标准做法是：应用程序启动时预先建好十几个连接“泡”在一个池子里复用。这就是大名鼎鼎的连接池 (Connection Pool)。
+
+## ⚙️ 资源竞争与获取时序机制
+
+利用对象池模式，实现不排队就用，池空了就等！
+
+```mermaid
+graph TD
+    A[Thread Client 1] -->|获取连接| C{Pool(队列是否有余余库存?)}
+    B[Thread Client 2] -->|获取连接| C
+
+    C -->|Yes| D[从 Queue poll 取出一个 Connection]
+    D --> E[执行 SQL CRUD ...]
+    E --> F[执行完毕，把 Connection 重新 offer 回队列]
+    F --> C
+
+    C -->|No| G((等待/阻塞... 直到设定尝试超时时间))
+```
+
+## 💻 步步为营：高并发池设计
+
+### 步骤 1：利用原语建立安全容器
+
+Java 的并发包 `java.util.concurrent` 提供了大名鼎鼎的 **`ArrayBlockingQueue`**，这是做连接池的天纵之选。它自带“队列空则阻塞取线程”、“队列满则阻塞加线程”的极致性能操作。
+
+由于我们没有真的连接数据库（那需要引入 JDBC 依赖），我们来用一个实体类 `MockConnection` 代指宝贵的资源：
+
+```java
+import java.util.UUID;
+
+public class MockConnection {
+    private final String id = UUID.randomUUID().toString();
+
+    public void executeQuery(String sql) {
+        System.out.println("🔗 连接[" + id.substring(0,6) + "] 开始执行查询: " + sql);
+    }
+}
+```
+
+### 步骤 2：核心机制之获取、借用、归还
+
+用阻塞队列来持有这批在内存中的 `Connection`：
+
+```java
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.TimeUnit;
+
+public class CustomConnectionPool {
+    private final BlockingQueue<MockConnection> connectionQueue;
+
+    public CustomConnectionPool(int poolSize) {
+        connectionQueue = new ArrayBlockingQueue<>(poolSize);
+        // 初始化时，提前建立好连接，放入池中（类似热车）
+        for (int i = 0; i < poolSize; i++) {
+            connectionQueue.offer(new MockConnection());
+        }
+    }
+
+    // 核心出借方法：从池里借走某一条链接
+    public MockConnection getConnection(long timeoutMillis) throws InterruptedException {
+        // poll(time, unit)：如果是空的，就会原地阻塞，直到有别的线程归还 或 超时时间抵达
+        MockConnection conn = connectionQueue.poll(timeoutMillis, TimeUnit.MILLISECONDS);
+        if (conn == null) {
+            throw new RuntimeException("获取连接超时了（数据库太忙了池里没空闲连接）！");
+        }
+        return conn;
+    }
+
+    // 核心归还方法：使用完了，把链接完璧归赵！释放给下一个排队的人
+    public void releaseConnection(MockConnection conn) {
+        if (conn != null) {
+            connectionQueue.offer(conn);
+        }
+    }
+}
+```
+
+### 步骤 3：并发洪水下的效果观察
+
+我们在一个容量仅有 2 的小池子里，塞进 5 个并发去强抢资源：
+
+```java
+public class PoolApplication {
+    public static void main(String[] args) {
+        CustomConnectionPool pool = new CustomConnectionPool(2); // ✅ 只有两个池连接！
+
+        for (int i = 1; i <= 5; i++) {
+            int threadId = i;
+            new Thread(() -> {
+                MockConnection conn = null;
+                try {
+                    System.out.println("用户 " + threadId + " 排队等待可用机器...");
+                    // 所有人等待配额，抢不到的阻塞死等
+                    conn = pool.getConnection(3000);
+
+                    conn.executeQuery("SELECT * FROM users WHERE id = " + threadId);
+                    Thread.sleep(1000); // 假装我在执行 SQL 花了 1 秒钟
+
+                } catch (Exception e) {
+                    System.err.println("用户 " + threadId + " " + e.getMessage());
+                } finally {
+                    // 重要：使用完毕一定要释放连接回到队列，否则别人将永远陷入死等！
+                    System.out.println("==== 用户 " + threadId + " 归还连接！ ====");
+                    pool.releaseConnection(conn);
+                }
+            }).start();
+        }
+    }
+}
+```
+
+你会从终端输出奇妙地观察到：前面 2 个用户火速拿到连接执行，而剩下 3 个用户**全部被挂起停留（Blocked）**。直到 1 秒后有用户执行完毕归还，才能被后头排队者获取并执行。这正是电商后台限流排队的底层写照！
+
+## 🛡 韧性与异常边界 (Resilience)
+
+你有没有发现，我们在执行归还池子的代码时，使用了 `finally { pool.releaseConnection(); }` 块？这就是程序最极致的韧性：**不论在 `executeQuery()` 中发生了何种网络断裂、SQL 语法错误，哪怕抛出 Exception，执行流程绝对会走入 finally 安全地将连接还回去。** 如果没有 finally，那么一旦出现错误跳出代码块，这条连接将永远不会归还到 Queue 中，也就是业内最忌讳的**内存泄漏/连接池耗尽** (Connection Leaks)。
+
+## ⚠️ 避坑说明 (Post-mortem)
+
+- **为何工业界有 HikariCP？**：我们手工打造的 `ArrayBlockingQueue` 池是最基础版本的安全。像 SpringBoot 默认的中间件 `HikariCP` 进一步丧心病狂地优化了 CPU 伪共享（False Sharing）、通过自己重写的 `FastList` 替代 JDK 集合，达到了微秒级的恐怖出借性能！有兴趣不妨翻阅其开源代码。
+
+---
+
+## 🎯 本章小结
+
+通过本项目，你掌握了：
+- 对象池 (Object Pool) 设计模式的核心思想：预建、借用、归还。
+- `ArrayBlockingQueue` 阻塞队列的等待/超时机制。
+- `finally` 块在资源归还中的绝对必要性——防止连接泄漏。
+- 工业级连接池 (HikariCP) 的优化方向：伪共享消除与自定义集合。
+
+📦 **完整源码参考**：[GitHub - Silio/project-05-connection-pool](https://github.com/woodynew/Silio)
+
+➡️ **下一篇**：[实战六：手写简易依赖注入容器](/tutorials/java-basics/project-06-mini-ioc/) — 破解 Spring 反射魔法。

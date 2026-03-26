@@ -1,0 +1,39 @@
+---
+title: 第 1 章：环境搭建与第一个程序
+description: 了解如何安装 Java 并编写你的第一个 HelloWorld 程序。
+sidebar:
+  order: 2
+---
+
+import InteractiveCode from "../../../../components/InteractiveCode.astro";
+
+在开始开发记账本之前，我们需要准备好开发环境，并了解 Java 程序的基本构成。
+
+## 第一个 Java 程序
+
+通常，学习一门编程语言的第一步都是向世界问好。在 Java 中，一个最简单的程序长这样：
+
+<InteractiveCode 
+  title="HelloWorld.java" 
+  expectedOutput="Hello, Silio!<br/>Process finished with exit code 0" 
+>
+```java
+public class HelloWorld {
+    public static void main(String[] args) {
+        System.out.println("Hello, Silio!");
+    }
+}
+```
+</InteractiveCode>
+
+### 代码解析
+
+1. `public class HelloWorld`：定义了一个名为 `HelloWorld` 的公开类。在 Java 中，所有的代码都必须存在于类中。
+2. `public static void main(String[] args)`：这是 Java 程序的入口点（主方法）。当你运行程序时，这行代码是第一条被执行的。
+3. `System.out.println(...)`：这行代码告诉计算机在控制台上打印一行文本。
+
+尝试点击上方的“**▶ 运行代码**”按钮，看看会发生什么！
+
+## 下一步
+
+现在你已经成功运行了第一个 Java 程序！在下一章中，我们将学习变量和控制流，开始实现我们记账本的核心逻辑。

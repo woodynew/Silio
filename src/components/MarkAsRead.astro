@@ -1,12 +1,12 @@
 ---
-import Default from '@astrojs/starlight/components/Pagination.astro';
+import Default from "@astrojs/starlight/components/Pagination.astro";
 
-const { id } = Astro.props;
+const pageId = Astro.props.entry?.id || Astro.url.pathname;
 ---
 
 <div class="mark-as-read-container">
   <label class="mark-as-read-label">
-    <input type="checkbox" id="mark-read-checkbox" data-page-id={id} />
+    <input type="checkbox" id="mark-read-checkbox" data-page-id={pageId} />
     <span>标记为已读（完成学习）</span>
   </label>
 </div>
@@ -15,43 +15,48 @@ const { id } = Astro.props;
 
 <script>
   function setupMarkAsRead() {
-    const checkbox = document.getElementById('mark-read-checkbox') as HTMLInputElement | null;
+    const checkbox = document.getElementById(
+      "mark-read-checkbox",
+    ) as HTMLInputElement | null;
     if (!checkbox) return;
 
-    const pageId = checkbox.getAttribute('data-page-id');
+    // Use the current page pathname as the reliable key
+    const pageId =
+      checkbox.getAttribute("data-page-id") || window.location.pathname;
     if (!pageId) return;
 
-    const storageKey = 'java-tutorial-progress';
-    
-    // Load state
-    const getProgress = () => {
+    const storageKey = "java-tutorial-progress";
+
+    const getProgress = (): Record<string, boolean> => {
       try {
-        return JSON.parse(localStorage.getItem(storageKey) || '{}');
+        return JSON.parse(localStorage.getItem(storageKey) || "{}");
       } catch {
         return {};
       }
     };
 
+    // Load saved state
     const progress = getProgress();
-    checkbox.checked = !!progress[pageId];
+    // Match by pathname or stored key
+    const normalizedPath = window.location.pathname;
+    checkbox.checked = !!progress[normalizedPath] || !!progress[pageId];
 
-    // Listen to changes
-    checkbox.addEventListener('change', (e) => {
+    // Save on change
+    checkbox.addEventListener("change", (e) => {
       const currentProgress = getProgress();
+      const key = normalizedPath; // Always use pathname as key
       if ((e.target as HTMLInputElement).checked) {
-        currentProgress[pageId] = true;
+        currentProgress[key] = true;
       } else {
-        delete currentProgress[pageId];
+        delete currentProgress[key];
       }
       localStorage.setItem(storageKey, JSON.stringify(currentProgress));
-      
-      // Dispatch event so sidebar can potentially update without reload
-      window.dispatchEvent(new CustomEvent('progress-updated'));
+
+      window.dispatchEvent(new CustomEvent("progress-updated"));
     });
   }
 
-  // Setup on initial load and view transitions
-  document.addEventListener('astro:page-load', setupMarkAsRead);
+  document.addEventListener("astro:page-load", setupMarkAsRead);
   setupMarkAsRead();
 </script>
 
@@ -66,7 +71,7 @@ const { id } = Astro.props;
     align-items: center;
     justify-content: space-between;
   }
-  
+
   .mark-as-read-label {
     display: flex;
     align-items: center;

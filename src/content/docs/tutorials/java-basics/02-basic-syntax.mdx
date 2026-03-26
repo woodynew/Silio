@@ -1,0 +1,45 @@
+---
+title: 第 2 章：变量与基础运算
+description: 学习如何在 Java 中存储和操作数据。
+sidebar:
+  order: 3
+---
+
+import InteractiveCode from "../../../../components/InteractiveCode.astro";
+
+要开发一个记账本，我们首先需要知道如何表示“钱”和“收支类别”。这就需要用到**变量**。
+
+## 声明变量
+
+在 Java 中，变量必须先声明类型，然后才能使用它。由于涉及金额，我们可以暂时使用 `double` 类型（注意：在真实的金融系统中，为了精度通常会使用 `BigDecimal`，但作为入门，`double` 足够了）。
+
+<InteractiveCode 
+  title="Ledger.java" 
+  expectedOutput="午餐花费了: 45.0 元<br/>当前余额为: 955.5 元<br/>Process finished with exit code 0" 
+>
+```java
+public class Ledger {
+    public static void main(String[] args) {
+        // 声明一个 double 类型的变量存储初始余额
+        double balance = 1000.50;
+        
+        // 记录一笔餐饮支出
+        double lunchCost = 45.0;
+        balance = balance - lunchCost;
+        
+        System.out.println("午餐花费了: " + lunchCost + " 元");
+        System.out.println("当前余额为: " + balance + " 元");
+    }
+}
+```
+</InteractiveCode>
+
+你可以点击“**▶ 运行代码**”查看结果。
+
+通过这段代码，你学会了：
+
+- 如何用 `double` 存储小数。
+- 变量是可以改变的（`balance = balance - lunchCost`）。
+- 可以在 `System.out.println` 中使用 `+` 符号将文本和变量拼接在一起输出。
+
+下一节，我们将学习如何使用条件判断来防止账户余额变成负数。

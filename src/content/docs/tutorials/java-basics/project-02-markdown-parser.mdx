@@ -1,0 +1,142 @@
+---
+title: 实战二：简易 Markdown 到 HTML 转换器
+description: 掌握正则表达式、强大的字符串处理方法及文件 IO 缓冲流。
+sidebar:
+  order: 11
+---
+
+> **场景与痛点**：处理文件读写是服务器的核心需求之一。许多教程教了 `FileInputStream` 后就戛然而止，导致新人遇到中文乱码或大文件卡顿就束手无策。利用将简单的 MD 解析为 HTML，这既好玩，也能暴露出所有的 IO 流弊端。
+
+## ⚙️ 文件流处理流水线
+
+读写需要利用包装类 (Decorators)，将基础字节流逐步包装为高效并能理解字符编码的高级流：
+
+```mermaid
+graph LR
+    A[disk.md 字节流] -->|FileInputStream| B(字节数据)
+    B -->|InputStreamReader<br/>提供 UTF-8 字符解码| C(字符流)
+    C -->|BufferedReader<br/>提供行缓冲机制| D(逐行String)
+    D -->|核心 Parser<br/>正则替换| E(转化出的 HTML 行)
+    E -->|BufferedWriter| F[写入最终文件 disk.html]
+```
+
+## 💻 步步为营：构建解析引擎
+
+### 步骤 1：定义轻量级正则匹配
+
+Markdown 里的标题（`#`、`##`）、加粗（`**`）的转换，本质上是高级字符串替换。
+
+```java
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public class MDParser {
+    // 将 `**加粗文案**` 替换成 `<strong>加粗文案</strong>`
+    private static final Pattern BOLD_PATTERN = Pattern.compile("\\*\\*(.+?)\\*\\*");
+
+    public static String parseLine(String line) {
+        if (line.trim().isEmpty()) {
+            return "<br/>";
+        }
+
+        // 1. 处理标题 (如: "### 标题" -> "<h3>标题</h3>")
+        if (line.startsWith("#")) {
+            int level = 0;
+            while (level < line.length() && line.charAt(level) == '#') {
+                level++;
+            }
+            if (level <= 6) {
+                String content = line.substring(level).trim();
+                return "<h" + level + ">" + content + "</h" + level + ">";
+            }
+        }
+
+        // 2. 处理粗体正则
+        Matcher matcher = BOLD_PATTERN.matcher(line);
+        line = matcher.replaceAll("<strong>$1</strong>");
+
+        // 普通文本包含在段落中
+        return "<p>" + line + "</p>";
+    }
+}
+```
+
+### 步骤 2：通过 NIO 极简处理文件
+
+Java 7+ 提供了 `java.nio.file.Files`，能用极具表现力的 API 一句话完成安全的文件 IO。如果不涉及数百 MB 的超大文件，流控细节已经可以无缝转交底层：
+
+```java
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.List;
+import java.util.ArrayList;
+
+public class MDConverterApp {
+    public static void main(String[] args) {
+        Path inputPath = Paths.get("document.md");
+        Path outputPath = Paths.get("document.html");
+
+        try {
+            // 安全警告：仅限文件较小（<100MB）时可以直接一次性读取全部行！
+            List<String> rawLines = Files.readAllLines(inputPath);
+            List<String> parsedLines = new ArrayList<>();
+
+            parsedLines.add("<html><body>"); // 补全头部
+
+            for (String raw : rawLines) {
+                parsedLines.add(MDParser.parseLine(raw));
+            }
+
+            parsedLines.add("</body></html>");
+
+            // 写入目标文件，默认就是覆盖式写入并带有安全关闭流管理
+            Files.write(outputPath, parsedLines);
+
+            System.out.println("✅ 转换完成！输出至：" + outputPath.toAbsolutePath());
+        } catch (Exception e) {
+            System.err.println("❌ 读写文件时发生严重错误：" + e.getMessage());
+        }
+    }
+}
+```
+
+## 🛡 韧性与异常边界 (Resilience)
+
+为什么这里没看到传统的 `try/catch/finally` 去显式 `reader.close()`？
+因为 `java.nio.file.Files.readAllLines()` 已经在内部为你做了最严格的**安全释放保障 (try-with-resources 机制)**。
+
+**生产级考量**：
+如果这是一个处理 1GB 日志（甚至超大文件）的方法，直接用 `readAllLines` 将导致 **OOM (Out Of Memory Error，内存溢出)**！
+正确的流治水手段是配合 Streams 或传统的 BufferedReader 循环：
+
+```java
+// 拥有强大韧性的逐行写 (无需内存爆裂)
+try (BufferedReader reader = Files.newBufferedReader(inputPath);
+     BufferedWriter writer = Files.newBufferedWriter(outputPath)) {
+     String line;
+     while ((line = reader.readLine()) != null) {
+         writer.write(MDParser.parseLine(line));
+         writer.newLine(); // 系统相关换行
+     }
+}
+```
+
+## ⚠️ 避坑说明 (Post-mortem)
+
+- **永远显式声明编码**：虽然 `Files.write()` 默认用 `UTF-8`，但若是传统的 `FileWriter`，这经常依赖于操作系统的当前环境。只要有文件 I/O，**永远、永远明确你的编码标准**。
+- **避免过度迷恋面向字符正则**：解析真正复杂的标准 Markdown，靠 `String.replace` 会导致天量的非预期越界匹配，工业界请老老实实地拉 AST (抽象语法树)，比如开源的 `flexmark-java` 库。此例仅为学习字符串魔法。
+
+---
+
+## 🎯 本章小结
+
+通过本项目，你掌握了：
+- 使用 `java.nio.file.Files` 进行现代化的文件读写操作。
+- 正则表达式 (`Pattern`/`Matcher`) 的基本匹配与替换技术。
+- 字符编码的重要性以及 `BufferedReader/Writer` 的流式处理。
+- 大文件场景下 `readAllLines` 导致 OOM 的风险及正确的逐行流式处理方法。
+
+📦 **完整源码参考**：[GitHub - Silio/project-02-markdown-parser](https://github.com/woodynew/Silio)
+
+➡️ **下一篇**：[实战三：多线程并发大文件下载器](/tutorials/java-basics/project-03-concurrent-downloader/) — 进入多线程与网络分块传输的世界。

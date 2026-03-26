@@ -1,0 +1,132 @@
+---
+title: 实战八：简易 LSM-Tree KV 引擎 (迷你数据库)
+description: 跳开关系型数据库庞杂查询概念！用 Append-Only (顺序写) 和内存索引实现现代持久化引擎的基础思想。
+sidebar:
+  order: 17
+---
+
+> **场景与痛点**：数据库到底长什么样？许多开发者写了多年 SQL，却依然不知道它到底是在磁盘上的什么鬼玩意这导致索引与优化成了瞎蒙。如果你了解最负盛名的底层引擎——RocksDB 和 LevelDB，便知道它们全建立在极其巧妙却淳朴的 LSM-Tree 思路：把所有写入动作转成“日记追加”以突破硬盘写入极速，再辅以内存倒推偏移量。
+
+## ⚙️ 追加更新与稀疏索引结构
+
+与其去文件中间改数据导致卡顿（随机写 O(N)），不如一直堆积往末尾新增日志（顺序写 O(1)）。
+
+```mermaid
+graph TD
+    A[PUT(Key='user', Val='Alice')] --> C(追加记录进 db.log 文件末尾处)
+    B[PUT(Key='user', Val='Bob')] --> C
+    C -->|记录偏移位置 Offset=251| D(在 HashMap 索引器中: 指向最新 251 的偏移点)
+
+    D -.->|GET(Key='user')| E[从 251 字节处起读取旧长值截取结果 'Bob']
+```
+
+## 💻 步步为营：高低速合璧
+
+### 步骤 1：记录的打包编解码结构
+
+写磁盘需要按照一定的固定或分隔标识符来组织数据：我们把每一次 PUT/DELETE 都打包为一个长字符串：
+
+```java
+import java.io.RandomAccessFile;
+import java.util.HashMap;
+import java.util.Map;
+
+public class MiniKVS {
+
+    // 控制写指针的利器
+    private final RandomAccessFile dbFile;
+    // 内存中的寻址哈希字典：Key -> 文件位置便宜 Offset
+    private final Map<String, Long> indexMap = new HashMap<>();
+
+    public MiniKVS(String dbPath) throws Exception {
+        dbFile = new RandomAccessFile(dbPath, "rw");
+        loadIndex(); // 启动时，扫描全部盘建出内存索引地图
+    }
+}
+```
+
+### 步骤 2：启动追溯构建索引
+
+每次引擎重启，如何重新知道数据到底分布在哪些块？只要完整扫一遍我们一直往后追加写死的老 Log 即可。这就叫做构建**索引重映射 (Rebuilding Indexes)**。
+
+```java
+    // 假设数据按行记录格式： "put,username,ALICE" 或 "del,username"
+    private void loadIndex() throws Exception {
+        dbFile.seek(0); // 指针归零起始节点
+        long currentOffset = 0;
+        String line;
+
+        // while readLine()
+        while ((line = dbFile.readLine()) != null) {
+            String[] parts = line.split(",");
+            if (parts.length >= 2) {
+                String action = parts[0];
+                String key = parts[1];
+
+                if ("put".equals(action)) {
+                    indexMap.put(key, currentOffset);
+                } else if ("del".equals(action)) {
+                    indexMap.remove(key); // 删除覆盖即可
+                }
+            }
+            // 文件指针由于 readLine() 向后推进了，更新 currentOffset 到最新物理坐标点位。
+            currentOffset = dbFile.getFilePointer();
+        }
+        System.out.println("💽 基于磁盘的引擎启动就绪。已加载 " + indexMap.size() + " 个键。");
+    }
+```
+
+### 步骤 3：极其暴力的 O(1) 写入及极速查询点对点恢复
+
+只有追加，没有文件碎片跳转，没有任何开销极大的 IO 定位——这就是写入速度为何甚至能干掉那些乱更新的关系型表！
+
+```java
+    public synchronized void put(String key, String value) throws Exception {
+        // 永远只在文件的最为深处附加（Append-Only！磁盘磁道顺序写最快的区域！）
+        long targetOffset = dbFile.length();
+        dbFile.seek(targetOffset);
+
+        String record = "put," + key + "," + value + "\n";
+        dbFile.writeBytes(record);
+
+        // 只有这个才是关键 —— 将最新的定位记录投放到超快内存映射中。
+        indexMap.put(key, targetOffset);
+    }
+
+    public synchronized String get(String key) throws Exception {
+        Long offset = indexMap.get(key);
+        if (offset == null) return null; // 内存没它的地址直接否决短路
+
+        // 我们只在这里触发一次 磁头读动作！定点打击！
+        dbFile.seek(offset);
+        String recordLine = dbFile.readLine();
+        String[] parts = recordLine.split(",");
+
+        // parts[0]="put", [1]="key", [2]="value"
+        return parts[2];
+    }
+```
+
+## 🛡 压实思想与异常边界 (Resilience & Compaction)
+
+这个系统目前最大的毛病就是：既然是追加堆叠写入，如果我对 `user` 这个相同的键来回更改 10 万次，那么整个物理磁盘上文件就会保留这非常恶心、早被推翻废弃过时的 99,999 次多余无效日志串！
+在工业界的实际操作中。这种冗余机制注重大师们的压实思路：
+我们需要一个后台守护线程（还记得上一章节怎么用的吗？），每到深夜或者文件达到数百兆时，开启一次 **Compaction 压实动作**：直接把最新的有效内容（当前 `indexMap` 中对应的最后全景切片）提出来，完整写入一个新临时干净的瘦身日志文件，再执行文件原子改名覆盖替换！！这就叫 **墓碑抹平合并整理**（也是 LSM Tree 这个技术名字的最强奥义之核！）。
+
+## ⚠️ 避坑说明 (Post-mortem)
+
+- 不要高估了磁盘或者 SSD。真正的现代数据库底层非常复杂。真正的读写需要更深的页面分块(Page Block 分发)、布隆过滤器(Bloom Filter：去快速预测不在库内的鬼键) 和复杂的 WAL 断电刷盘日志来维系它的绝对持久性及防损坏性（Durability）。我们的 MiniKVS 主要用于理解架构思路。
+
+---
+
+## 🎯 本章小结
+
+通过本项目，你掌握了：
+- Append-Only 顺序写入的性能优势及其 LSM-Tree 思想渊源。
+- `RandomAccessFile` 结合内存 `HashMap` 索引实现 O(1) 定位读取。
+- 冷启动时索引重建 (Index Rebuilding) 的扫描策略。
+- Compaction 压实操作的设计原理：清除冗余、释放磁盘空间。
+
+📦 **完整源码参考**：[GitHub - Silio/project-08-kv-database](https://github.com/woodynew/Silio)
+
+➡️ **下一篇**：[实战九：手写多线程简易 HTTP 服务器](/tutorials/java-basics/project-09-http-server/) — 剥开 Tomcat 的底层协议解析。

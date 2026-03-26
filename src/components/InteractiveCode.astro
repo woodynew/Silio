@@ -1,0 +1,115 @@
+---
+interface Props {
+  title?: string;
+  expectedOutput?: string;
+}
+
+const {
+  title = "Interactive Java",
+  expectedOutput = "Hello, Silio!<br/>Process finished with exit code 0",
+} = Astro.props;
+---
+
+<div class="brutalist-terminal">
+  <div class="terminal-header">
+    <span class="terminal-title">{title}</span>
+    <button
+      class="terminal-run-btn"
+      data-expected={expectedOutput}
+      onclick="const p = this.parentElement.parentElement; const output = p.querySelector('.terminal-output-content'); output.innerHTML = 'COMPILING...<br/>...'; setTimeout(() => { output.innerHTML = this.dataset.expected; }, 1000);"
+    >
+      [ RUN ]
+    </button>
+  </div>
+  <div class="terminal-body">
+    <slot />
+  </div>
+  <div class="terminal-output">
+    <div class="terminal-output-header">STDOUT</div>
+    <div class="terminal-output-content">READY.</div>
+  </div>
+</div>
+
+<style>
+  .brutalist-terminal {
+    border: 2px solid var(--sl-color-gray-1); /* High contrast harsh border */
+    margin: 2rem 0;
+    background: var(--sl-color-black);
+    color: var(--sl-color-white);
+  }
+
+  .terminal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: var(--sl-color-gray-1);
+    color: var(--sl-color-bg);
+    padding: 0.5rem 1rem;
+    font-family: var(--sl-font-mono);
+    text-transform: uppercase;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+  }
+
+  .terminal-title {
+    font-size: 0.85rem;
+  }
+
+  .terminal-run-btn {
+    background: transparent;
+    color: var(--sl-color-bg);
+    border: 2px solid var(--sl-color-bg);
+    padding: 0.15rem 0.75rem;
+    font-family: var(--sl-font-mono);
+    font-weight: 800;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: all 0s; /* No smooth transition, instant brutal feedback */
+  }
+
+  .terminal-run-btn:hover {
+    background: var(--sl-color-bg);
+    color: var(--sl-color-gray-1);
+  }
+
+  .terminal-run-btn:active {
+    transform: translate(2px, 2px);
+  }
+
+  /* Override expressive code boundaries to be flat/raw */
+  .terminal-body :global(.expressive-code) {
+    margin: 0 !important;
+  }
+
+  .terminal-body :global(.expressive-code pre) {
+    border: none !important;
+    background: var(--sl-color-bg-inline-code) !important;
+  }
+
+  .terminal-output {
+    border-top: 2px solid var(--sl-color-gray-1);
+    background: #000;
+  }
+
+  .terminal-output-header {
+    background: var(--sl-color-gray-1);
+    color: var(--sl-color-bg);
+    font-family: var(--sl-font-mono);
+    font-size: 0.7rem;
+    padding: 0.15rem 1rem;
+    text-transform: uppercase;
+    font-weight: 800;
+    border-bottom: 2px solid var(--sl-color-gray-1);
+  }
+
+  .terminal-output-content {
+    padding: 1.5rem;
+    color: var(--sl-color-accent); /* Neon Green Output */
+    font-family: var(--sl-font-mono);
+    font-size: 0.85rem;
+    line-height: 1.5;
+    min-height: 4rem;
+    white-space: pre-wrap;
+    text-shadow: 0 0 5px rgba(57, 255, 20, 0.4); /* Slight phosphor glow */
+  }
+</style>

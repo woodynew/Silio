@@ -1,0 +1,153 @@
+---
+title: 实战六：手写简易系统依赖注入容器 (IoC)
+description: 揭开 Spring 大厂框架的面纱，深入理解 Java 反射 (Reflection) 与控制反转。
+sidebar:
+  order: 15
+---
+
+> **场景与痛点**：每一个 Java 开发者都会天天写 `@Autowired`，并在不知不觉中依赖 Spring 框架。但这究竟发生什么魔法？这并不是黑盒。控制反转本质上只需要：扫描一堆 Class、反向实例化它们、并把实例塞到加了注解的成员变量中去。
+
+## ⚙️ 依赖注入（DI）的递归思想核心
+
+你必须理解“先有骨架，再填血肉”！
+
+```mermaid
+graph TD
+    A[SilioContext: 启动引擎] --> B[扫描包下所有类]
+    B --> C[找到标记了 @Component 的类]
+    C --> D[通过反射 newInstance() 创建实例存入 Map]
+    D --> E[扫描实例内字段寻找 @Autowired 注解]
+    E --> F[从 Map 中找依赖注入进字段中 field.set()]
+```
+
+## 💻 步步为营：创建自己的注入反射器
+
+### 步骤 1：自定义极简注解
+
+```java
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+
+// 保留到运行期，才能通过反射抓取得到
+@Retention(RetentionPolicy.RUNTIME)
+public @interface Component {
+}
+
+@Retention(RetentionPolicy.RUNTIME)
+public @interface Autowired {
+}
+```
+
+### 步骤 2：测试的业务类
+
+假设我们原本需要手工去 `new` 一大堆依赖关系极度复杂的类树：
+
+```java
+@Component
+public class DatabaseService {
+    public void query() {
+        System.out.println("🗄️ 执行数据库原生查询：SELECT * FROM MOCK ...");
+    }
+}
+
+@Component
+public class UserService {
+    @Autowired
+    private DatabaseService db; // 注意！我们完全没有写 new DatabaseService()
+
+    public void sayHello() {
+        System.out.println("👤 UserService 业务调用发起 >>>");
+        db.query();
+    }
+}
+```
+
+### 步骤 3：核心魔法 - 容器上下文管理器
+
+Java 强大的 `reflect` 包能让你探查代码在编译后隐匿的一切。这也是为什么它叫“反向照射”自己：
+
+```java
+import java.lang.reflect.Field;
+import java.util.HashMap;
+import java.util.Map;
+
+public class SilioContext {
+    // 我们的微缩版单例池 (Singleton Pool)，又名 ApplicationContext 核心缓存
+    private Map<Class<?>, Object> beanFactory = new HashMap<>();
+
+    public SilioContext(Class<?>... classes) throws Exception {
+        // 第一阶段：暴力实例化所有标记了 @Component 的 Bean
+        for (Class<?> clazz : classes) {
+            if (clazz.isAnnotationPresent(Component.class)) {
+                // 利用反射创建实例 (无参构造函数)
+                Object instance = clazz.getDeclaredConstructor().newInstance();
+                beanFactory.put(clazz, instance);
+                System.out.println("[IoC] 成功加载类入池: " + clazz.getSimpleName());
+            }
+        }
+
+        // 第二阶段：循环依赖注入 (将池子里的肉，通过反射硬生生塞进 @Autowired 的骨架里)
+        for (Object bean : beanFactory.values()) {
+            Field[] fields = bean.getClass().getDeclaredFields();
+            for (Field field : fields) {
+                if (field.isAnnotationPresent(Autowired.class)) {
+                    // 解除 private 访问限制！这一步威力无穷且饱受非议。
+                    field.setAccessible(true);
+                    Object dependency = beanFactory.get(field.getType());
+
+                    if (dependency == null) {
+                        throw new RuntimeException("致命异常：找不到依赖 Bean for " + field.getType());
+                    }
+
+                    // 将依赖对象设置给该成员变量
+                    field.set(bean, dependency);
+                }
+            }
+        }
+        System.out.println("[IoC] 依赖注入全部完毕。\n");
+    }
+
+    public <T> T getBean(Class<T> clazz) {
+        return (T) beanFactory.get(clazz);
+    }
+}
+```
+
+### 步骤 4：主引擎点火测试
+
+```java
+public class ReflectionApp {
+    public static void main(String[] args) throws Exception {
+        // 大厂框架的简化模拟初始化启动
+        SilioContext context = new SilioContext(UserService.class, DatabaseService.class);
+
+        // 拿来即用！你再也不需要手动 New 了。
+        UserService userService = context.getBean(UserService.class);
+        userService.sayHello();
+    }
+}
+```
+
+## 🛡 韧性与边界探讨 (Resilience)
+
+如果不加 `field.setAccessible(true)`，上面的代码就会无情报错 `IllegalAccessException`，因为你试图去给 `private` 变量赋值。这就牵扯到了 Java 9 引入的大争论以及现代 Java 的模块化(Module System)概念。由于反射可以无视一切封装规范直接修改内存布局，它也成为了严重的安全漏斗隐患。大型银行系统甚至会禁用这种行为以锁死权限越界。
+
+另一个致命异常是 **循环依赖 (Circular Dependency)**。在步骤 2 中，如果 A 又 `@Autowired` 取 B，就会出现先赋谁的值的问题。真正的 Spring 不得不使用非常厚重的“三级缓存机制”（后来演变为允许尽早暴露不完整的早期对象引用）来解决这个问题。
+
+## ⚠️ 避坑说明 (Post-mortem)
+
+- **为什么实际中极力避免用反射开发业务代码？**：反射的速度比直接 `new` 对象慢了几个量级！因为每次都需要通过 JVM 常量池查表、绕过访问安全验证。Spring 之所以快，是因为它的 IoC/反射 主要消耗在**启动阶段 (Startup)** 的唯一一次初始装载过程中，而非运行时！因此，在日常控制流业务中请避免强行使用反射。
+
+---
+
+## 🎯 本章小结
+
+通过本项目，你掌握了：
+- 自定义注解 (`@Retention(RUNTIME)`) 的声明与运行时获取。
+- Java 反射 API：`getDeclaredConstructor().newInstance()` 动态实例化。
+- `field.setAccessible(true)` 突破私有封装进行依赖注入。
+- Spring IoC 容器的核心抽象：扫描 → 实例化 → 依赖装配的三步闭环。
+
+📦 **完整源码参考**：[GitHub - Silio/project-06-mini-ioc](https://github.com/woodynew/Silio)
+
+➡️ **下一篇**：[实战七：定制化高性能日志框架](/tutorials/java-basics/project-07-custom-logger/) — 异步缓冲隔离主线程。

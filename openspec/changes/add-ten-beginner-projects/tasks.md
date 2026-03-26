@@ -1,0 +1,22 @@
+# Tasks: Implementation Steps
+
+- [x] **Task 1: Sidebar & Directory Setup**
+  - Create the 10 `.mdx` files under `src/content/docs/tutorials/java-basics/`.
+  - Update `astro.config.mjs` to include the new tutorials in the sidebar.
+- [x] **Task 2: Content Generation - Group A (IO & Object)**
+  - Write `project-01-weather-cli.mdx`.
+  - Write `project-02-markdown-parser.mdx`.
+- [x] **Task 3: Content Generation - Group B (Concurrency & Pooling)**
+  - Write `project-03-concurrent-downloader.mdx`.
+  - Write `project-04-local-cache.mdx`.
+  - Write `project-05-connection-pool.mdx`.
+- [x] **Task 4: Content Generation - Group C (Reflection & Disk Data)**
+  - Write `project-06-mini-ioc.mdx`.
+  - Write `project-07-custom-logger.mdx`.
+  - Write `project-08-kv-database.mdx`.
+- [x] **Task 5: Content Generation - Group D (Network Engines)**
+  - Write `project-09-http-server.mdx`.
+  - Write `project-10-nio-chat.mdx`.
+- [x] **Task 6: Review & Polish**
+  - Ensure all Mermaid.js diagrams render correctly and match the "Editorial Brutalism" feel.
+  - Check the "Logic with Resilience" messaging in all edge cases sections.
